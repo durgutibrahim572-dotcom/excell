@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Excel Doğum Günü Koşusu</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+  body { background: #1e293b; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: 'Segoe UI', Tahoma, sans-serif; }
+  #gameContainer { position: relative; width: 100%; max-width: 800px; height: 100vh; max-height: 450px; background: linear-gradient(180deg, #ff9a9e 0%, #fecfef 65%, #e2e8f0 65%, #cbd5e1 100%); overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+  canvas { display: block; width: 100%; height: 100%; }
+  #hud { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); width: 90%; max-width: 500px; background: rgba(255,255,255,0.92); padding: 10px 16px; border-radius: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 8px; }
+  .hud-top { display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 14px; color: #334155; }
+  .hearts { background: #fff; border: 2px solid #facc15; border-radius: 12px; padding: 2px 8px; }
+  .score { background: #fff; border: 2px solid #f472b6; border-radius: 12px; padding: 2px 10px; color: #db2777; }
+  .progress-wrap { display: flex; align-items: center; gap: 8px; }
+  .progress-bar { flex: 1; height: 12px; background: #e2e8f0; border-radius: 10px; overflow: hidden; }
+  #progressFill { width: 0%; height: 100%; background: linear-gradient(90deg, #107c41, #21a366); transition: width 0.1s linear; }
+  #overlay { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.72); display: flex; flex-direction: column; justify-content: center; align-items: center; color: #fff; text-align: center; padding: 20px; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin-bottom: 10px; color: #4ade80; text-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+  #overlay p { font-size: 16px; margin-bottom: 20px; color: #f1f5f9; max-width: 340px; line-height: 1.4; }
+  #startBtn { background: linear-gradient(135deg, #107c41, #185c37); color: #fff; border: none; padding: 14px 34px; font-size: 18px; font-weight: bold; border-radius: 30px; cursor: pointer; box-shadow: 0 6px 20px rgba(16, 124, 65, 0.5); }
+  #startBtn:active { transform: scale(0.96); }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <canvas id="gameCanvas"></canvas>
+  <div id="hud">
+    <div class="hud-top">
+      <div class="hearts" id="heartsDisplay">❤️❤️❤️</div>
+      <div>Pastaya Kalan Yol</div>
+      <div class="score" id="scoreDisplay">⭐ 0</div>
+    </div>
+    <div class="progress-wrap">
+      <span>🏁</span>
+      <div class="progress-bar"><div id="progressFill"></div></div>
+      <span>🎂</span>
+    </div>
+  </div>
+  <div id="overlay">
+    <h1 id="overlayTitle">Excel Doğum Günü Koşusu</h1>
+    <p id="overlayDesc">Ofis engellerinin üzerinden atla, yıldızları topla ve bitişteki doğum günü pastasına ulaş!<br><small>(Zıplamak için ekrana dokun - Havada 2. kez zıplayabilirsin)</small></p>
+    <button id="startBtn">Oyunu Başlat</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const overlay = document.getElementById("overlay");
+const overlayTitle = document.getElementById("overlayTitle");
+const overlayDesc = document.getElementById("overlayDesc");
+const startBtn = document.getElementById("startBtn");
+const heartsDisplay = document.getElementById("heartsDisplay");
+const scoreDisplay = document.getElementById("scoreDisplay");
+const progressFill = document.getElementById("progressFill");
+
+let audioCtx = null;
+
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+}
+
+function resize() {
+  canvas.width = canvas.parentElement.clientWidth;
+  canvas.height = canvas.parentElement.clientHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+let gameState = "START";
+let score = 0;
+let lives = 3;
+let distance = 0;
+const finishDistance = 4200;
+let speed = 5.5;
+let frame = 0;
+let obstacles = [];
+let stars = [];
+let confetti = [];
+let invulnerable = 0;
+let songTimers = [];
+
+const player = {
+  x: 70,
+  y: 0,
+  w: 44,
+  h: 44,
+  vy: 0,
+  gravity: 0.65,
+  jumpPower: -12.5,
+  jumps: 0,
+  maxJumps: 2
+};
+
+function groundY() {
+  return canvas.height * 0.78;
+}
+
+function clearSongTimers() {
+  songTimers.forEach(t => clearTimeout(t));
+  songTimers = [];
+}
+
+function resetGame() {
+  initAudio();
+  clearSongTimers();
+  score = 0;
+  lives = 3;
+  distance = 0;
+  speed = 5.5;
+  frame = 0;
+  obstacles = [];
+  stars = [];
+  confetti = [];
+  invulnerable = 0;
+  player.y = groundY() - player.h;
+  player.vy = 0;
+  player.jumps = 0;
+  updateHUD();
+  gameState = "PLAYING";
+  overlay.style.display = "none";
+}
+
+function updateHUD() {
+  heartsDisplay.textContent = "❤️".repeat(Math.max(0, lives)) + "🤍".repeat(Math.max(0, 3 - lives));
+  scoreDisplay.textContent = "⭐ " + score;
+  const pct = Math.min(100, Math.floor((distance / finishDistance) * 100));
+  progressFill.style.width = pct + "%";
+}
+
+function playTone(freq, duration, type = "sine", volume = 0.14) {
+  try {
+    initAudio();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  } catch (e) {}
+}
+
+function playBirthdaySong() {
+  clearSongTimers();
+  // Tam "İyi Ki Doğdun" (Happy Birthday) melodisi
+  const melody = [
+    // 1. Dize: İyi ki doğdun...
+    { f: 261.63, t: 0.0, d: 0.25 },
+    { f: 261.63, t: 0.3, d: 0.25 },
+    { f: 293.66, t: 0.6, d: 0.55 },
+    { f: 261.63, t: 1.2, d: 0.55 },
+    { f: 349.23, t: 1.8, d: 0.55 },
+    { f: 329.63, t: 2.4, d: 1.0 },
+    // 2. Dize: İyi ki doğdun...
+    { f: 261.63, t: 3.6, d: 0.25 },
+    { f: 261.63, t: 3.9, d: 0.25 },
+    { f: 293.66, t: 4.2, d: 0.55 },
+    { f: 261.63, t: 4.8, d: 0.55 },
+    { f: 392.00, t: 5.4, d: 0.55 },
+    { f: 349.23, t: 6.0, d: 1.0 },
+    // 3. Dize: İyi ki doğdun... (Yüksek nota)
+    { f: 261.63, t: 7.2, d: 0.25 },
+    { f: 261.63, t: 7.5, d: 0.25 },
+    { f: 523.25, t: 7.8, d: 0.55 },
+    { f: 440.00, t: 8.4, d: 0.55 },
+    { f: 349.23, t: 9.0, d: 0.55 },
+    { f: 329.63, t: 9.6, d: 0.55 },
+    { f: 293.66, t: 10.2, d: 1.0 },
+    // 4. Dize: Mutlu yıllar sana!
+    { f: 466.16, t: 11.4, d: 0.25 },
+    { f: 466.16, t: 11.7, d: 0.25 },
+    { f: 440.00, t: 12.0, d: 0.55 },
+    { f: 349.23, t: 12.6, d: 0.55 },
+    { f: 392.00, t: 13.2, d: 0.55 },
+    { f: 349.23, t: 13.8, d: 1.2 }
+  ];
+
+  melody.forEach(note => {
+    const id = setTimeout(() => {
+      playTone(note.f, note.d, "triangle", 0.22);
+      playTone(note.f * 0.5, note.d, "sine", 0.12);
+    }, note.t * 1000);
+    songTimers.push(id);
+  });
+}
+
+function jump() {
+  initAudio();
+  if (gameState !== "PLAYING") return;
+  if (player.jumps < player.maxJumps) {
+    player.vy = player.jumpPower;
+    player.jumps++;
+    playTone(player.jumps === 1 ? 420 : 580, 0.12, "sine", 0.12);
+  }
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space" || e.code === "ArrowUp") jump();
+});
+canvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  jump();
+}, { passive: false });
+canvas.addEventListener("mousedown", jump);
+startBtn.addEventListener("click", resetGame);
+
+function drawExcelCharacter(x, y, w, h) {
+  ctx.save();
+  if (invulnerable > 0 && Math.floor(frame / 4) % 2 === 0) ctx.globalAlpha = 0.5;
+
+  const legSwing = gameState === "WIN" ? Math.sin(frame * 0.5) * 4 : Math.sin(frame * 0.35) * 6;
+  ctx.strokeStyle = "#1e293b";
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.35, y + h);
+  ctx.lineTo(x + w * 0.35 - legSwing, y + h + 8);
+  ctx.moveTo(x + w * 0.65, y + h);
+  ctx.lineTo(x + w * 0.65 + legSwing, y + h + 8);
+  ctx.stroke();
+
+  ctx.fillStyle = "#21a366";
+  ctx.beginPath();
+  ctx.roundRect(x + 8, y, w - 8, h, 6);
+  ctx.fill();
+
+  ctx.fillStyle = "#33c481";
+  ctx.fillRect(x + 22, y + 6, 16, 8);
+  ctx.fillStyle = "#107c41";
+  ctx.fillRect(x + 22, y + 18, 16, 8);
+  ctx.fillStyle = "#185c37";
+  ctx.fillRect(x + 22, y + 30, 16, 8);
+
+  ctx.fillStyle = "#107c41";
+  ctx.beginPath();
+  ctx.roundRect(x, y + 6, 24, h - 12, 5);
+  ctx.fill();
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 17px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("X", x + 12, y + h / 2);
+
+  ctx.fillStyle = "#f43f5e";
+  ctx.beginPath();
+  ctx.moveTo(x + 16, y);
+  ctx.lineTo(x + 26, y - 14);
+  ctx.lineTo(x + 34, y);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = "#facc15";
+  ctx.beginPath();
+  ctx.arc(x + 26, y - 15, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawObstacle(ob) {
+  ctx.save();
+  ctx.fillStyle = "#ef4444";
+  ctx.beginPath();
+  ctx.roundRect(ob.x, ob.y, ob.w, ob.h, 5);
+  ctx.fill();
+  ctx.fillStyle = "#fca5a5";
+  ctx.fillRect(ob.x + 6, ob.y + 8, ob.w - 12, 5);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(ob.x + 8, ob.y + 18, ob.w - 16, 8);
+  ctx.restore();
+}
+
+function drawCake(x, y) {
+  ctx.save();
+  ctx.fillStyle = "#f472b6";
+  ctx.beginPath();
+  ctx.roundRect(x, y - 35, 70, 35, 6);
+  ctx.fill();
+  ctx.fillStyle = "#fbcfe8";
+  ctx.beginPath();
+  ctx.roundRect(x + 12, y - 62, 46, 27, 6);
+  ctx.fill();
+  [22, 35, 48].forEach((offset) => {
+    ctx.fillStyle = "#38bdf8";
+    ctx.fillRect(x + offset - 2, y - 76, 4, 14);
+    ctx.fillStyle = "#facc15";
+    ctx.beginPath();
+    ctx.arc(x + offset, y - 80 + Math.sin(frame * 0.3) * 1.5, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+function update() {
+  frame++;
+  const gY = groundY();
+
+  if (gameState === "PLAYING") {
+    distance += speed;
+    if (invulnerable > 0) invulnerable--;
+
+    player.vy += player.gravity;
+    player.y += player.vy;
+    if (player.y >= gY - player.h) {
+      player.y = gY - player.h;
+      player.vy = 0;
+      player.jumps = 0;
+    }
+
+    if (distance < finishDistance - 450 && frame % 85 === 0) {
+      const h = 32 + Math.random() * 14;
+      obstacles.push({ x: canvas.width + 20, y: gY - h, w: 30, h: h });
+    }
+
+    if (distance < finishDistance - 350 && frame % 65 === 0) {
+      stars.push({ x: canvas.width + 20, y: gY - 75 - Math.random() * 55, r: 12 });
+    }
+
+    obstacles.forEach((ob) => { ob.x -= speed; });
+    obstacles = obstacles.filter((ob) => ob.x + ob.w > -20);
+
+    stars.forEach((st) => { st.x -= speed; });
+    stars = stars.filter((st) => st.x + st.r > -20);
+
+    obstacles.forEach((ob) => {
+      if (
+        invulnerable === 0 &&
+        player.x + 6 < ob.x + ob.w &&
+        player.x + player.w - 6 > ob.x &&
+        player.y + 6 < ob.y + ob.h &&
+        player.y + player.h > ob.y
+      ) {
+        lives--;
+        invulnerable = 50;
+        playTone(160, 0.25, "sawtooth", 0.14);
+        if (lives <= 0) {
+          gameState = "GAMEOVER";
+          overlayTitle.textContent = "Oyun Bitti!";
+          overlayDesc.textContent = "Engellere takıldın. Topladığın Yıldız: " + score;
+          startBtn.textContent = "Tekrar Dene";
+          overlay.style.display = "flex";
+        }
+      }
+    });
+
+    stars = stars.filter((st) => {
+      const hit =
+        player.x < st.x + st.r &&
+        player.x + player.w > st.x - st.r &&
+        player.y < st.y + st.r &&
+        player.y + player.h > st.y - st.r;
+      if (hit) {
+        score += 10;
+        playTone(720, 0.1, "sine", 0.12);
+      }
+      return !hit;
+    });
+
+    updateHUD();
+
+    if (distance >= finishDistance) {
+      gameState = "WIN";
+      player.y = gY - player.h;
+      playBirthdaySong();
+      for (let i = 0; i < 110; i++) {
+        confetti.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * -canvas.height,
+          c: ["#f43f5e", "#facc15", "#4ade80", "#38bdf8", "#a855f7"][i % 5],
+          s: 2 + Math.random() * 3
+        });
+      }
+      setTimeout(() => {
+        if (gameState === "WIN") {
+          overlayTitle.textContent = "🎉 İyi Ki Doğdun! 🎂";
+          overlayDesc.textContent = "Excel pastaya başarıyla ulaştı! Toplam Puan: " + score;
+          startBtn.textContent = "Tekrar Oyna";
+          overlay.style.display = "flex";
+        }
+      }, 4500);
+    }
+  }
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "#64748b";
+  ctx.fillRect(0, gY, canvas.width, canvas.height - gY);
+  ctx.fillStyle = "#107c41";
+  ctx.fillRect(0, gY, canvas.width, 6);
+
+  const remaining = Math.max(0, finishDistance - distance);
+  if (remaining < canvas.width) {
+    const finishX = player.x + remaining + 40;
+    for (let r = 0; r < 6; r++) {
+      ctx.fillStyle = r % 2 === 0 ? "#ffffff" : "#0f172a";
+      ctx.fillRect(finishX, gY - 60 + r * 10, 12, 10);
+    }
+    drawCake(finishX + 35, gY);
+  }
+
+  obstacles.forEach(drawObstacle);
+
+  stars.forEach((st) => {
+    ctx.font = "22px Arial";
+    ctx.fillText("⭐", st.x - 11, st.y + 8);
+  });
+
+  const bounceY = gameState === "WIN" ? Math.abs(Math.sin(frame * 0.25)) * 12 : 0;
+  drawExcelCharacter(player.x, player.y - bounceY, player.w, player.h);
+
+  if (gameState === "WIN") {
+    confetti.forEach((p) => {
+      p.y += p.s;
+      if (p.y > canvas.height) p.y = -10;
+      ctx.fillStyle = p.c;
+      ctx.fillRect(p.x, p.y, 7, 7);
+    });
+  }
+
+  requestAnimationFrame(update);
+}
+
+player.y = groundY() - player.h;
+update();
+</script>
+</body>
+</html>
